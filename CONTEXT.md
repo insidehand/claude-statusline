@@ -1,0 +1,203 @@
+# CONTEXT.md — Design Decisions & Reference
+
+This file documents the rationale behind implementation choices in this repo.
+It's intended as a reference for Claude Code when making future modifications.
+
+---
+
+## Architecture
+
+Two implementations are provided:
+
+| File | Runtime | Speed | When to use |
+|------|---------|-------|-------------|
+| `statusline.sh` | bash | ~200–400ms | Quick install, no build step |
+| `statusline.go` | Go binary | ~10–30ms | Default recommended; avoids lag on plan-mode switches |
+
+The bash version is the reference implementation. The Go version mirrors it
+but runs in parallel goroutines for the async tasks.
+
+**Note:** The bash version uses GNU awk syntax (`match(str, regex, arr)` three-argument form)
+which requires `gawk`. macOS ships with BSD awk which does not support this. If the bash
+version is used on macOS, install gawk (`brew install gawk`) or use the Go version instead.
+
+### Workflow: modifying the Go version
+
+Edit `statusline.go`, then run `./build.sh` to recompile and install the binary.
+
+---
+
+## Statusline JSON fields (from Claude Code stdin)
+
+Claude Code pipes a JSON object to the statusline script on every update.
+Relevant fields used in this implementation:
+
+```jsonc
+{
+  "model": {
+    "display_name": "Claude Sonnet 4.6"   // used for model label + icon
+  },
+  "session_id": "abc123",                 // used for session tracking + msg lookup
+  "workspace": {
+    "current_dir": "/Users/luke/project"  // used for project name + git
+  },
+  "transcript_path": "/path/to/file.jsonl" // used for context tokens + last msg
+}
+```
+
+Additional fields exist (see official docs) but are not used here to keep the
+script lean.
+
+---
+
+## JSONL transcript format
+
+Each line in the transcript file is a JSON object with these relevant fields:
+
+```jsonc
+{
+  "type": "assistant",
+  "sessionId": "abc123",
+  "isSidechain": false,
+  "timestamp": "2026-03-17T03:58:47.006Z",  // ISO 8601
+  "message": {
+    "role": "assistant",
+    "model": "claude-sonnet-4-6",            // model ID (assistant messages only)
+    "usage": {
+      "input_tokens": 1234,
+      "cache_creation_input_tokens": 567,
+      "cache_read_input_tokens": 8900,
+      "output_tokens": 89
+    },
+    "content": "..."                         // string for user msgs, array for tool use
+  }
+}
+```
+
+---
+
+## Context window calculation
+
+**Why 160k and not 200k?**
+
+Claude Code's auto-compact fires at approximately 80% of the 200k context
+window. That means the *effective* usable window before compaction is ~160k
+tokens. Displaying percentage against 160k gives a more accurate "how close am
+I to being compacted" reading.
+
+If you have auto-compact disabled, change `effectiveCap` / the divisor to
+`200000` in both `statusline.sh` and `statusline.go`.
+
+**Token counting method:**
+
+Rather than calling an API, we parse the local transcript JSONL file directly.
+We scan the last 100 lines in reverse and find the most recent non-sidechain
+assistant message with a `usage` block, then sum:
+
+```
+total = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+```
+
+This matches how context window usage is billed and displayed in Claude Code's
+own `/context` command.
+
+---
+
+## Session tracking
+
+Session data is stored in `~/.claude/session-tracker/sessions/<session_id>.json`.
+
+Each file tracks:
+- `intervals[]` — `{ start, end }` unix timestamps for each active period
+- `total_seconds` — sum of all interval durations
+- `last_heartbeat` — timestamp of last statusline update
+
+A gap > 600 seconds (10 min) between heartbeats starts a new interval (treats
+as a new working block, not idle time).
+
+Total hours shown = sum of all sessions with `date == today`.
+
+---
+
+## Last user message display
+
+We search the transcript JSONL in reverse for the most recent entry matching:
+- `isSidechain == false`
+- `sessionId == <current session>`
+- `type == "user"` and `role == "user"`
+- `content` is a plain string (not JSON array/object, not XML tool output)
+
+Messages starting with `[`, `{`, `<local-command`, `<command-`, or `Caveat:`
+are filtered as system/tool messages.
+
+Up to 3 lines are shown, each capped at 80 chars.
+
+---
+
+## Plugin system
+
+Inactive features are kept as commented-out plugins in `statusline.go`, modelled
+after the p10k plugin pattern. To add a new segment:
+
+1. Write a function that returns a `string`
+2. Add a goroutine in `main()`: `go func() { ch <- result{"key", myFunc()} }()`
+3. Increment the channel buffer size and loop count in `main()`
+4. Use `vals["key"]` in the output `fmt.Printf`
+5. Run `./build.sh`
+
+### Available plugins
+
+**Daily API cost** (`dailyCost()`)
+Scans all today's JSONL files and calculates total spend using Anthropic's
+published per-token pricing. **Only meaningful if using API key billing, not
+subscription plans.** Pricing is hardcoded in `knownPricing` — update if rates change.
+To enable: uncomment the goroutine in `main()` and add `vals["cost"]` to the output line.
+
+---
+
+## Colors
+
+All colors use 24-bit RGB ANSI codes (`\033[38;2;R;G;Bm`) for iTerm2
+compatibility. The palette is loosely based on OneDark:
+
+| Role | Color |
+|------|-------|
+| Model (Opus) | `rgb(195, 158, 83)` gold |
+| Model (Sonnet) | `rgb(118, 170, 185)` cyan |
+| Model (Haiku) | `rgb(255, 182, 193)` pink |
+| Context OK (<60%) | `rgb(108, 167, 108)` green |
+| Context warn (60–80%) | `rgb(188, 155, 83)` gold |
+| Context danger (>80%) | `rgb(185, 102, 82)` red |
+| User message | `rgb(152, 195, 121)` light green |
+| Empty bar segments | `rgb(64, 64, 64)` dark gray |
+
+---
+
+## Git branch cache
+
+Git operations are cached for 5 seconds (in-memory in Go, file-based in bash)
+to avoid slowing down rapid statusline refreshes. The cache is keyed per
+working directory.
+
+---
+
+## Files written to disk
+
+| Path | Purpose |
+|------|---------|
+| `~/.claude/settings.json` | Registers the statusline command |
+| `~/.claude/statusline.sh` | Bash version (installed by `install.sh`) |
+| `~/.claude/statusline-go` | Go binary (installed by `install.sh --go`) |
+| `~/.claude/session-tracker/sessions/*.json` | Per-session time tracking |
+| `~/.claude/statusline-cache/git_branch` | Git branch 5s cache (bash only) |
+
+---
+
+## Known limitations / future work
+
+- Session tracker does **not** archive old sessions automatically during normal
+  operation. Old `.json` files accumulate in `sessions/` until manually cleaned.
+- Context percentage may briefly show 0% at the start of a new session before
+  the first assistant response (no transcript entry yet). The Go version shows
+  the empty bar (`░░░░░░░░░░ 0% --`); the bash version shows nothing.
+- The Go binary must be rebuilt after editing `statusline.go`. Run `./build.sh`.

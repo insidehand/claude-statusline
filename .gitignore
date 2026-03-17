@@ -1,0 +1,5 @@
+# compiled Go binary (lives in ~/.claude/, not the repo)
+statusline-go
+
+# macOS
+.DS_Store
