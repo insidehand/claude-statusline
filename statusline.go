@@ -30,22 +30,32 @@ const (
 	colorModelHaiku  = "\033[38;2;255;182;193m"
 	colorModelOther  = "\033[38;2;192;192;192m"
 
-	colorCtxGreen = "\033[38;2;108;167;108m"
-	colorCtxGold  = "\033[38;2;188;155;83m"
-	colorCtxRed   = "\033[38;2;185;102;82m"
+	colorCtxGreen  = "\033[38;2;108;167;108m"
+	colorCtxGold   = "\033[38;2;188;155;83m"
+	colorCtxOrange = "\033[38;2;210;120;60m"
+	colorCtxRed    = "\033[38;2;185;102;82m"
 )
 
 // ── Input schema ──────────────────────────────────────────────────────────────
+
+type RateLimitWindow struct {
+	UsedPercentage float64 `json:"used_percentage"`
+	ResetsAt       int64   `json:"resets_at"`
+}
 
 type Input struct {
 	Model struct {
 		DisplayName string `json:"display_name"`
 	} `json:"model"`
-	SessionID  string `json:"session_id"`
-	Workspace  struct {
+	SessionID string `json:"session_id"`
+	Workspace struct {
 		CurrentDir string `json:"current_dir"`
 	} `json:"workspace"`
 	TranscriptPath string `json:"transcript_path"`
+	RateLimits     struct {
+		FiveHour RateLimitWindow `json:"five_hour"`
+		SevenDay RateLimitWindow `json:"seven_day"`
+	} `json:"rate_limits"`
 }
 
 // ── Session persistence ───────────────────────────────────────────────────────
@@ -111,33 +121,42 @@ func main() {
 		key string
 		val string
 	}
-	ch := make(chan result, 4)
+	ch := make(chan result, 3)
 
 	go func() { ch <- result{"git", gitBranch(inp.Workspace.CurrentDir)} }()
-	go func() { ch <- result{"hours", totalHours(inp.SessionID)} }()
 	go func() { ch <- result{"ctx", contextDisplay(inp.TranscriptPath)} }()
 	go func() { ch <- result{"msg", lastUserMessage(inp.TranscriptPath, inp.SessionID)} }()
-	// Plugin: uncomment to show today's API cost (API key billing only)
-	// go func() { ch <- result{"cost", dailyCost()} }()
 
 	vals := map[string]string{}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		r := <-ch
 		vals[r.key] = r.val
 	}
 
 	// update session synchronously (avoid file-write races)
 	updateSession(inp.SessionID)
+	usageTime, activeCount := totalHours(inp.SessionID)
 
 	project := filepath.Base(inp.Workspace.CurrentDir)
 	modelDisp := formatModel(inp.Model.DisplayName)
 
-	// Line 1
-	fmt.Printf("%s[%s] 📂 %s%s%s | %s%s\n",
-		colorReset, modelDisp, project,
-		vals["git"], vals["ctx"], vals["hours"], colorReset)
+	// Line 1: model | directory | git branch | context usage
+	fmt.Printf("%s[%s] 📂 %s%s%s%s\n",
+		colorReset, modelDisp, project, vals["git"], vals["ctx"], colorReset)
 
-	// Line 2+: last user message
+	// Line 2: rate limits | today usage time | live sessions
+	rateLimits := formatRateLimits(inp)
+	liveStr := ""
+	if activeCount > 1 {
+		liveStr = fmt.Sprintf(" %s[%d×]%s", colorGray, activeCount, colorReset)
+	}
+	line2 := usageTime + liveStr
+	if rateLimits != "" {
+		line2 = rateLimits + " | " + line2
+	}
+	fmt.Printf("%s! %s%s\n", colorReset, line2, colorReset)
+
+	// Line 3: last user message
 	if vals["msg"] != "" {
 		fmt.Print(vals["msg"])
 	}
@@ -183,7 +202,7 @@ func gitBranch(dir string) string {
 	if branch == "" {
 		return ""
 	}
-	v := " ⚡ " + branch
+	v := " " + branchIcon(branch) + " " + branch
 
 	gitMu.Lock()
 	gitCache = v
@@ -242,17 +261,16 @@ func updateSession(id string) {
 	}
 }
 
-func totalHours(currentID string) string {
+func totalHours(currentID string) (timeStr string, active int) {
 	dir := sessionsDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return "0m"
+		return "0m", 0
 	}
 
 	today := time.Now().Format("2006-01-02")
 	now := time.Now().Unix()
 	var totalSec int64
-	active := 0
 
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".json") {
@@ -277,16 +295,12 @@ func totalHours(currentID string) string {
 
 	h := totalSec / 3600
 	m := (totalSec % 3600) / 60
-	var t string
 	if h > 0 {
-		t = fmt.Sprintf("%dh%dm", h, m)
+		timeStr = fmt.Sprintf("%dh%dm", h, m)
 	} else {
-		t = fmt.Sprintf("%dm", m)
+		timeStr = fmt.Sprintf("%dm", m)
 	}
-	if active > 1 {
-		t = fmt.Sprintf("%s [%d×]", t, active)
-	}
-	return t
+	return timeStr, active
 }
 
 // ── Context usage ─────────────────────────────────────────────────────────────
@@ -491,6 +505,129 @@ func formatCost(c float64) string {
 	return fmt.Sprintf("$%.2f", c)
 }
 
+// ── Git branch icon ───────────────────────────────────────────────────────────
+
+func branchIcon(branch string) string {
+	lower := strings.ToLower(branch)
+	switch {
+	case branch == "main" || branch == "master":
+		return "🌳"
+	case strings.HasPrefix(lower, "feature/") || strings.HasPrefix(lower, "feat/"):
+		return "🌿"
+	case strings.HasPrefix(lower, "fix/") || strings.HasPrefix(lower, "bugfix/") || strings.HasPrefix(lower, "bug/"):
+		return "🔧"
+	case strings.HasPrefix(lower, "hotfix/"):
+		return "🚨"
+	case strings.HasPrefix(lower, "release/"):
+		return "🚀"
+	case strings.HasPrefix(lower, "chore/"):
+		return "🧹"
+	case strings.HasPrefix(lower, "docs/"):
+		return "📝"
+	case strings.HasPrefix(lower, "test/"):
+		return "🧪"
+	case strings.HasPrefix(lower, "refactor/"):
+		return "♻️"
+	default:
+		return "🪾"
+	}
+}
+
+// ── Rate limits ───────────────────────────────────────────────────────────────
+
+// usedPctColor returns a linear green→red color based on usage percentage.
+func usedPctColor(pct float64) string {
+	switch {
+	case pct <= 25:
+		return colorCtxGreen
+	case pct <= 50:
+		return colorCtxGold
+	case pct <= 75:
+		return colorCtxOrange
+	default:
+		return colorCtxRed
+	}
+}
+
+// wasteUrgencyColor returns a color for the reset countdown based on
+// how much quota will be wasted: score = (100 - used%) × (elapsed / total_window).
+func wasteUrgencyColor(usedPct float64, resetsAt int64, totalWindowSecs float64) string {
+	if resetsAt <= 0 || totalWindowSecs <= 0 {
+		return colorGray
+	}
+	remaining := time.Until(time.Unix(resetsAt, 0)).Seconds()
+	if remaining <= 0 {
+		return colorGray
+	}
+	elapsed := totalWindowSecs - remaining
+	urgency := elapsed / totalWindowSecs
+	score := (100.0 - usedPct) * urgency
+	switch {
+	case score <= 20:
+		return colorCtxGreen
+	case score <= 50:
+		return colorCtxGold
+	case score <= 70:
+		return colorCtxOrange
+	default:
+		return colorCtxRed
+	}
+}
+
+func formatResetDuration(d time.Duration) string {
+	if d <= 0 {
+		return "now"
+	}
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	mins := int(d.Minutes()) % 60
+	switch {
+	case days > 0 && hours > 0:
+		return fmt.Sprintf("%dd%dh", days, hours)
+	case days > 0:
+		return fmt.Sprintf("%dd", days)
+	case hours > 0 && mins > 0:
+		return fmt.Sprintf("%dh%dm", hours, mins)
+	case hours > 0:
+		return fmt.Sprintf("%dh", hours)
+	default:
+		return fmt.Sprintf("%dm", mins)
+	}
+}
+
+func formatRateLimits(inp Input) string {
+	fh := inp.RateLimits.FiveHour
+	sd := inp.RateLimits.SevenDay
+	if fh.UsedPercentage == 0 && sd.UsedPercentage == 0 {
+		return ""
+	}
+
+	const fiveHourSecs = 5 * 3600.0
+	const sevenDaySecs = 7 * 24 * 3600.0
+
+	fhPctColor := usedPctColor(fh.UsedPercentage)
+	sdPctColor := usedPctColor(sd.UsedPercentage)
+
+	fhReset := ""
+	if fh.ResetsAt > 0 {
+		if d := time.Until(time.Unix(fh.ResetsAt, 0)); d > 0 {
+			c := wasteUrgencyColor(fh.UsedPercentage, fh.ResetsAt, fiveHourSecs)
+			fhReset = fmt.Sprintf(" | %s%s%s", c, formatResetDuration(d), colorReset)
+		}
+	}
+	sdReset := ""
+	if sd.ResetsAt > 0 {
+		if d := time.Until(time.Unix(sd.ResetsAt, 0)); d > 0 {
+			c := wasteUrgencyColor(sd.UsedPercentage, sd.ResetsAt, sevenDaySecs)
+			sdReset = fmt.Sprintf(" | %s%s%s", c, formatResetDuration(d), colorReset)
+		}
+	}
+
+	return fmt.Sprintf("5h: %s%d%%%s%s | 7d: %s%d%%%s%s",
+		fhPctColor, int(fh.UsedPercentage), colorReset, fhReset,
+		sdPctColor, int(sd.UsedPercentage), colorReset, sdReset)
+}
+
 // ── Last user message ─────────────────────────────────────────────────────────
 
 var skipPrefixes = []string{"[", "{", "<local-command", "<command-", "Caveat:"}
@@ -560,7 +697,7 @@ func lastUserMessage(path, sessionID string) string {
 }
 
 func formatMsg(raw string) string {
-	const maxLines = 3
+	const maxLines = 1
 	const maxWidth = 80
 
 	msgLines := strings.Split(raw, "\n")
@@ -573,10 +710,10 @@ func formatMsg(raw string) string {
 		if len(l) > maxWidth {
 			l = l[:maxWidth-3] + "..."
 		}
-		out = append(out, fmt.Sprintf("%s｜%s%s%s", colorReset, colorGreen, l, colorReset))
+		out = append(out, fmt.Sprintf("%s> %s%s%s", colorReset, colorGreen, l, colorReset))
 	}
 	if len(msgLines) > maxLines {
-		out = append(out, fmt.Sprintf("%s｜... (+%d lines)%s", colorReset, len(msgLines)-maxLines, colorReset))
+		out = append(out, fmt.Sprintf("%s> %s... (+%d lines)%s", colorReset, colorGray, len(msgLines)-maxLines, colorReset))
 	}
 	return strings.Join(out, "\n") + "\n"
 }

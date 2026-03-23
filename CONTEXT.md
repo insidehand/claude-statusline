@@ -30,23 +30,32 @@ Edit `statusline.go`, then run `./build.sh` to recompile and install the binary.
 ## Statusline JSON fields (from Claude Code stdin)
 
 Claude Code pipes a JSON object to the statusline script on every update.
-Relevant fields used in this implementation:
+Fields used in this implementation (as of Claude Code 2.1.81):
 
 ```jsonc
 {
   "model": {
-    "display_name": "Claude Sonnet 4.6"   // used for model label + icon
+    "display_name": "Sonnet 4.6"          // used for model label + icon
   },
   "session_id": "abc123",                 // used for session tracking + msg lookup
   "workspace": {
     "current_dir": "/Users/luke/project"  // used for project name + git
   },
-  "transcript_path": "/path/to/file.jsonl" // used for context tokens + last msg
+  "transcript_path": "/path/to/file.jsonl", // used for context tokens + last msg
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 40,              // 0–100, used for rate limit display
+      "resets_at": 1774033200             // unix timestamp, used for countdown
+    },
+    "seven_day": {
+      "used_percentage": 15,
+      "resets_at": 1774497600
+    }
+  }
 }
 ```
 
-Additional fields exist (see official docs) but are not used here to keep the
-script lean.
+Other available fields (not currently used): `version`, `cwd`, `cost`, `context_window`, `output_style`.
 
 ---
 
@@ -130,7 +139,8 @@ We search the transcript JSONL in reverse for the most recent entry matching:
 Messages starting with `[`, `{`, `<local-command`, `<command-`, or `Caveat:`
 are filtered as system/tool messages.
 
-Up to 3 lines are shown, each capped at 80 chars.
+Only the first line is shown (capped at 80 chars). If the message has more lines,
+a `(+N lines)` suffix is appended in gray.
 
 ---
 
@@ -168,8 +178,23 @@ compatibility. The palette is loosely based on OneDark:
 | Context OK (<60%) | `rgb(108, 167, 108)` green |
 | Context warn (60–80%) | `rgb(188, 155, 83)` gold |
 | Context danger (>80%) | `rgb(185, 102, 82)` red |
+| Rate orange | `rgb(210, 120, 60)` orange |
 | User message | `rgb(152, 195, 121)` light green |
-| Empty bar segments | `rgb(64, 64, 64)` dark gray |
+| Empty bar / secondary text | `rgb(64, 64, 64)` dark gray |
+
+### Rate limit color logic
+
+Two separate color schemes are used for the rate limit segment:
+
+**Used percentage** — linear green → red:
+- 0–25% → green, 26–50% → gold, 51–75% → orange, 76%+ → red
+
+**Reset countdown** — waste urgency score:
+```
+score = (100 - used%) × (time_elapsed / total_window)
+```
+High score means you've used little capacity but the window is almost over (bad).
+- score 0–20 → green, 21–50 → gold, 51–70 → orange, 71+ → red
 
 ---
 

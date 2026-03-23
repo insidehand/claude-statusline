@@ -1,10 +1,11 @@
 # claude-statusline
 
-[Claude Code](https://docs.anthropic.com/en/docs/claude-code/statusline) 的狀態列，在終端機底部用兩行顯示最重要的資訊：模型、專案、Git 分支、Context 用量，以及你的最後一則訊息。
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code/statusline) 的狀態列，在終端機底部用三行顯示最重要的資訊。
 
 ```
-[💠 Claude Sonnet 4.6] 📂 MemberCard ⚡ main | [████████░░] 78% 125k | 1h42m
-｜幫我修一下 barcode 高度的 normalization 問題
+[💠 Sonnet 4.6] 📂 MemberCard 🌳 main | [████████░░] 78% 125k
+! 5h: 18% | 26m | 7d: 40% | 2d15h | 1h42m
+> 幫我修一下 barcode 高度的 normalization 問題
 ```
 
 靈感來源：[Jackle Chen 的文章](https://jackle.pro/articles/claude-code-status-line)。
@@ -16,15 +17,37 @@
 **第一行**
 | 區段 | 範例 | 說明 |
 |------|------|------|
-| 模型 | `💠 Claude Sonnet 4.6` | 圖示依模型等級變換 |
+| 模型 | `💠 Sonnet 4.6` | 圖示依模型等級變換（💛 Opus / 💠 Sonnet / 🌸 Haiku）|
 | 專案 | `📂 MemberCard` | 當前目錄的 `basename` |
-| Git 分支 | `⚡ main` | 快取 5 秒，非 git 目錄則不顯示 |
+| Git 分支 | `🌳 main` | 依分支前綴顯示不同圖示，快取 5 秒 |
 | Context 進度條 | `████████░░ 78% 125k` | 基於 160k 有效視窗（見下方說明）|
-| 工作時間 | `1h42m` | 今日累計，午夜重置 |
 
 **第二行**
-你傳給 Claude 的最後一則訊息，最多顯示 3 行，每行 80 字元。
-同時開多個 session 時特別有用。
+| 區段 | 範例 | 說明 |
+|------|------|------|
+| 5h 用量 | `5h: 18%` | 綠→橘→紅（線性，0–100%）|
+| 5h 重置倒數 | `26m` | 顏色依「浪費緊迫度」變化（見下方說明）|
+| 7d 用量 | `7d: 40%` | 同上 |
+| 7d 重置倒數 | `2d15h` | 同上 |
+| 今日工作時間 | `1h42m` | 今日累計，午夜重置 |
+| 同時開啟數 | `[3×]` | 有多個 session 活躍時才顯示 |
+
+**第三行**
+你傳給 Claude 的最後一則訊息（第一行，最多 80 字元）。多行訊息會標示 `(+N lines)`。
+
+**Git 分支圖示**
+| 分支 | 圖示 |
+|------|------|
+| `main` / `master` | 🌳 |
+| `feature/*` / `feat/*` | 🌿 |
+| `fix/*` / `bugfix/*` | 🔧 |
+| `hotfix/*` | 🚨 |
+| `release/*` | 🚀 |
+| `chore/*` | 🧹 |
+| `docs/*` | 📝 |
+| `test/*` | 🧪 |
+| `refactor/*` | ♻️ |
+| 其他 | 🪾 |
 
 ---
 
@@ -90,6 +113,15 @@ inactive 功能以 plugin 的形式保留在 `statusline.go` 中（類似 p10k �
 
 ---
 
+## 浪費緊迫度（rate limit 倒數顏色）
+
+倒數顏色用「浪費分數」決定：`score = (100 - 已用%) × (已過時間 / 視窗總長)`
+
+- 快到期但用很少 → 分數高 → 紅色（提醒你沒用夠）
+- 剛開始或用量正常 → 分數低 → 綠色
+
+---
+
 ## 自訂
 
 所有設計決策都記錄在 [`CONTEXT.md`](CONTEXT.md)，格式為 Claude Code 參考文件，可以直接交給 Claude 說「修改 X」，不需重新解釋架構。
@@ -97,7 +129,7 @@ inactive 功能以 plugin 的形式保留在 `statusline.go` 中（類似 p10k �
 常見調整項目：
 
 - **顏色** → `CONTEXT.md § Colors`，全部使用 24-bit RGB，相容 iTerm2
-- **最後訊息的最大行數 / 寬度** → `maxLines`、`maxWidth` 常數
+- **最後訊息寬度** → `maxWidth` 常數（Go）
 - **Session 閒置判斷門檻** → 間隔超過 600 秒視為新區間，可自行調整
 - **Context 上限** → `effectiveCap` / `160000`
 
