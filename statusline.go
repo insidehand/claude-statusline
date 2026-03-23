@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -574,6 +575,23 @@ func wasteUrgencyColor(usedPct float64, resetsAt int64, totalWindowSecs float64)
 	}
 }
 
+// deltaColor returns a color based on deviation from ideal pace.
+// delta = used% - elapsed%  (0 = perfect pace)
+// Both large positive (burning too fast) and large negative (too slow) → red.
+func deltaColor(delta float64) string {
+	abs := math.Abs(delta)
+	switch {
+	case abs <= 10:
+		return colorCtxGreen
+	case abs <= 30:
+		return colorCtxGold
+	case abs <= 50:
+		return colorCtxOrange
+	default:
+		return colorCtxRed
+	}
+}
+
 func formatResetDuration(d time.Duration) string {
 	if d <= 0 {
 		return "now"
@@ -618,8 +636,15 @@ func formatRateLimits(inp Input) string {
 	sdReset := ""
 	if sd.ResetsAt > 0 {
 		if d := time.Until(time.Unix(sd.ResetsAt, 0)); d > 0 {
-			c := wasteUrgencyColor(sd.UsedPercentage, sd.ResetsAt, sevenDaySecs)
-			sdReset = fmt.Sprintf(" | %s%s%s", c, formatResetDuration(d), colorReset)
+			remainPct := d.Seconds() * 100 / sevenDaySecs
+			elapsedPct := 100.0 - remainPct
+			delta := sd.UsedPercentage - elapsedPct
+			sign := "+"
+			if delta < 0 {
+				sign = "-"
+			}
+			c := deltaColor(delta)
+			sdReset = fmt.Sprintf(" | %s%s · Δ%s%d%%%s", c, formatResetDuration(d), sign, int(math.Abs(delta)), colorReset)
 		}
 	}
 
