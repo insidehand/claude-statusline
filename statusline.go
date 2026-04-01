@@ -122,14 +122,13 @@ func main() {
 		key string
 		val string
 	}
-	ch := make(chan result, 3)
+	ch := make(chan result, 2)
 
 	go func() { ch <- result{"git", gitBranch(inp.Workspace.CurrentDir)} }()
 	go func() { ch <- result{"ctx", contextDisplay(inp.TranscriptPath)} }()
-	go func() { ch <- result{"msg", lastUserMessage(inp.TranscriptPath, inp.SessionID)} }()
 
 	vals := map[string]string{}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 2; i++ {
 		r := <-ch
 		vals[r.key] = r.val
 	}
@@ -156,11 +155,6 @@ func main() {
 		line2 = rateLimits + " | " + line2
 	}
 	fmt.Printf("%s! %s%s\n", colorReset, line2, colorReset)
-
-	// Line 3: last user message
-	if vals["msg"] != "" {
-		fmt.Print(vals["msg"])
-	}
 }
 
 // ── Model formatting ──────────────────────────────────────────────────────────
