@@ -638,8 +638,10 @@ func formatRateLimits(inp Input) string {
 				sign = "-"
 			}
 			c := deltaColor(delta)
-			deltaHours := int(math.Round(math.Abs(delta) * 1.68))
-			sdReset = fmt.Sprintf(" | %s%s · Δ%s%d%%(%dh)%s", c, formatResetDuration(d), sign, int(math.Abs(delta)), deltaHours, colorReset)
+			absDelta := math.Abs(delta)
+			deltaMinutes := absDelta * (sevenDaySecs / 100 / 60)
+			deltaHours := int(math.Round(deltaMinutes / 60))
+			sdReset = fmt.Sprintf(" | %s%s · Δ%s%d%%(%dh)%s", c, formatResetDuration(d), sign, int(math.Round(absDelta)), deltaHours, colorReset)
 		}
 	}
 
