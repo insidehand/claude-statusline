@@ -53,42 +53,53 @@
 
 ## 安裝
 
-### Bash 版本（免編譯）
+所有安裝都透過根目錄的 `install.sh`，重跑等於重裝。安裝前會先備份 `~/.claude/settings.json`（`settings.json.bak.<timestamp>`），只改動相關的 key。
 
 ```bash
 git clone https://github.com/your-username/claude-statusline.git
 cd claude-statusline
-./install.sh
+./install.sh all                  # Go 版 statusline + mods/ 下所有 mod
 ```
 
-重新啟動 Claude Code 即可。
+### Statusline
+
+```bash
+./install.sh statusline --go      # Go 版本（推薦，速度明顯較快）
+./install.sh statusline           # Bash 版本（免編譯，symlink 到 repo）
+```
+
+Go 版本需要 Go ≥ 1.21。可用 Homebrew 安裝：`brew install go`，或從 [go.dev/dl](https://go.dev/dl/) 下載。
 
 > **macOS 注意：** bash 版本需要 GNU awk。`brew install gawk`，或直接使用 Go 版本。
 
-### Go 版本（推薦，速度明顯較快）
+### Mod
 
 ```bash
-./install.sh --go
+./install.sh mod todo-panel
 ```
 
-需要 Go ≥ 1.21。可用 Homebrew 安裝：`brew install go`，或從 [go.dev/dl](https://go.dev/dl/) 下載。
+`~/.claude/mods/<name>` 會 symlink 到 repo 的 `mods/<name>/`，並把路徑加進 `settings.json` 的 `env.CLAUDE_CODE_PLUGIN_DIRS`。之後改 repo 裡的檔案就會 hot reload。
+
+重新啟動 Claude Code 即可套用設定變更。
 
 ---
 
 ## 解除安裝
 
 ```bash
-./uninstall.sh
+./uninstall.sh statusline         # 移除兩種版本的 statusline 與 statusLine 設定
+./uninstall.sh mod todo-panel     # 移除 symlink 與 PLUGIN_DIRS 中的路徑
+./uninstall.sh all
 ```
 
 ---
 
 ## 修改後重新編譯
 
-修改 `statusline.go` 後執行：
+修改 `statusline/statusline.go` 後執行：
 
 ```bash
-./build.sh
+./build.sh                        # 等同 ./install.sh statusline --go
 ```
 
 ---
@@ -150,7 +161,7 @@ inactive 功能以 plugin 的形式保留在 `statusline.go` 中（類似 p10k �
 ## 系統需求
 
 - macOS（建議使用 iTerm2 以支援 24-bit 色彩）
-- `jq` — `brew install jq`（Bash 版本需要）
+- `jq` — `brew install jq`（安裝腳本與 Bash 版本需要）
 - `gawk` — `brew install gawk`（Bash 版本需要，macOS 內建 awk 不相容）
 - Go ≥ 1.21（Go 版本需要）
 
@@ -160,11 +171,15 @@ inactive 功能以 plugin 的形式保留在 `statusline.go` 中（類似 p10k �
 
 ```
 claude-statusline/
-├── statusline.sh     # Bash 版本
-├── statusline.go     # Go 版本（用 build.sh 編譯）
-├── install.sh        # 安裝腳本（預設 Bash，加 --go 安裝 Go 版本）
-├── uninstall.sh      # 解除安裝
-├── build.sh          # 編譯 Go binary → ~/.claude/statusline-go
-├── CONTEXT.md        # 設計決策與欄位說明
+├── statusline/
+│   ├── statusline.sh   # Bash 版本
+│   └── statusline.go   # Go 版本（用 build.sh 編譯）
+├── mods/
+│   └── todo-panel/     # Claude Code mod（install.json 宣告需要的 env）
+├── lib/common.sh       # install / uninstall 共用函式
+├── install.sh          # ./install.sh statusline [--go] | mod <name> | all
+├── uninstall.sh        # ./uninstall.sh statusline | mod <name> | all
+├── build.sh            # = ./install.sh statusline --go
+├── CONTEXT.md          # 設計決策與欄位說明
 └── README.md
 ```

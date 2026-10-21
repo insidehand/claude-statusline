@@ -1,0 +1,9 @@
+{
+  "name": "todo-panel",
+  "version": "0.1.0",
+  "description": "A sidebar listing what this session has not handled yet: Claude's open tasks and items waiting on your decision",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "luke"
+  }
+}
